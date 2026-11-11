@@ -11,8 +11,11 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.118.0",
+    "@vladmandic/human": "^3.3.6",
+    "leaflet": "^1.9.4",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "react-leaflet": "^5.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

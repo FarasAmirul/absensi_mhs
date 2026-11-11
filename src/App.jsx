@@ -2,6 +2,104 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabase";
 import "./App.css";
+import FaceRecognition from "./FaceRecognition";
+import AdminDashboard from "./AdminDashboard";
+import { MapContainer, TileLayer, Marker, Circle, Popup, useMap } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+function CampusMap() {
+  const campusPosition = [-6.5902089, 106.7856329];
+
+  const [myPosition, setMyPosition] = useState(null);
+  const [locationMessage, setLocationMessage] = useState(
+    "Klik tombol untuk mengetahui lokasi kamu."
+  );
+
+  function updateMyLocation() {
+    if (!navigator.geolocation) {
+      setLocationMessage("Browser tidak mendukung GPS.");
+      return;
+    }
+
+    setLocationMessage("Sedang mengambil lokasi...");
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const coords = [
+          position.coords.latitude,
+          position.coords.longitude,
+        ];
+
+        setMyPosition(coords);
+        setLocationMessage("Lokasi berhasil ditemukan.");
+      },
+      () => {
+        setLocationMessage(
+          "Gagal mengambil lokasi. Periksa izin GPS browser."
+        );
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0,
+      }
+    );
+  }
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <h3>Lokasi Kampus dan Mahasiswa</h3>
+
+      <MapContainer
+        center={campusPosition}
+        zoom={17}
+        style={{
+          height: "350px",
+          width: "100%",
+          borderRadius: "12px",
+          zIndex: 1,
+        }}
+        scrollWheelZoom={true}
+      >
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+
+        <Marker position={campusPosition}>
+          <Popup>STIKOM EL RAHMA</Popup>
+        </Marker>
+
+        <Circle
+          center={campusPosition}
+          radius={300}
+          pathOptions={{
+            color: "green",
+            fillColor: "green",
+            fillOpacity: 0.15,
+          }}
+        />
+
+        {myPosition && (
+          <Marker position={myPosition}>
+            <Popup>Lokasi Kamu</Popup>
+          </Marker>
+        )}
+      </MapContainer>
+
+      <button
+        className="login-button"
+        type="button"
+        style={{ marginTop: 12 }}
+        onClick={updateMyLocation}
+      >
+        Perbarui Lokasi Saya
+      </button>
+
+      <p>{locationMessage}</p>
+    </div>
+  );
+}
 
 function App() {
   const [nim, setNim] = useState("");
@@ -13,6 +111,7 @@ function App() {
   const [user, setUser] = useState(null);
   const [todayAttendance, setTodayAttendance] = useState(null);
   const [history, setHistory] = useState([]);
+  const [pendingAttendanceAction, setPendingAttendanceAction] = useState(null);
 
   const loadAttendance = useCallback(async () => {
     if (!user) return;
@@ -82,33 +181,79 @@ function App() {
     }
   }
 
-  async function handleAttendance(action) {
-    setAttendanceLoading(true);
-    setErrorMessage("");
-    setNotice("");
+ 
+async function handleAttendance(action, faceEmbedding) {
+  setAttendanceLoading(true);
+  setErrorMessage("");
+  setNotice("");
 
-    try {
-      const { data, error } = await supabase.functions.invoke("attendance", {
-        body: { action },
-      });
-
-      if (error) {
-        throw new Error(
-          data?.error || error.message || "Gagal menghubungi server absensi."
-        );
-      }
-
-      if (data?.error) throw new Error(data.error);
-
-      setNotice(data?.message || "Absensi berhasil.");
-      await loadAttendance();
-    } catch (error) {
-      console.error("Attendance error:", error);
-      setErrorMessage(error.message || "Absensi gagal diproses.");
-    } finally {
-      setAttendanceLoading(false);
+  try {
+    if (!faceEmbedding) {
+  throw new Error("Verifikasi wajah diperlukan sebelum absensi.");
+}
+    // Pastikan browser mendukung GPS
+    if (!navigator.geolocation) {
+      throw new Error("Browser tidak mendukung fitur GPS.");
     }
+
+    // Ambil koordinat lokasi mahasiswa
+    const position = await new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(
+        resolve,
+        (error) => {
+          if (error.code === 1) {
+            reject(new Error("Izin lokasi ditolak. Aktifkan izin lokasi di browser."));
+          } else if (error.code === 2) {
+            reject(new Error("Lokasi tidak dapat ditemukan. Periksa GPS Anda."));
+          } else if (error.code === 3) {
+            reject(new Error("Waktu pengambilan lokasi habis. Coba lagi."));
+          } else {
+            reject(new Error("Gagal mengambil lokasi GPS."));
+          }
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 0,
+        }
+      );
+    });
+
+    const { latitude, longitude } = position.coords;
+
+    // Kirim absensi beserta koordinat ke Supabase
+    const { data, error } = await supabase.functions.invoke("attendance", {
+      body: {
+        action,
+        latitude,
+        longitude,
+        face_embedding: faceEmbedding,
+      },
+    });
+
+    if (error) {
+      throw new Error(
+        data?.error || error.message || "Gagal menghubungi server absensi."
+      );
+    }
+
+    if (data?.error) {
+      throw new Error(data.error);
+    }
+
+    setNotice(
+      `${data?.message || "Absensi berhasil."} Lokasi berhasil direkam.`
+    );
+
+    await loadAttendance();
+  } catch (error) {
+    console.error("Attendance error:", error);
+    setErrorMessage(error.message || "Absensi gagal diproses.");
+  } finally {
+    setAttendanceLoading(false);
   }
+}
+
 
   async function handleLogout() {
     setLoading(true);
@@ -149,6 +294,9 @@ function App() {
       year: "numeric",
     });
   }
+   if (user?.role === "admin") {
+    return <AdminDashboard user={user} onLogout={handleLogout} />;
+  }
 
   if (user) {
     return (
@@ -176,6 +324,9 @@ function App() {
               <p>Role: {user.role}</p>
             </div>
           </div>
+
+          <CampusMap />
+
 
           <h3>Absensi Hari Ini</h3>
 
@@ -209,11 +360,35 @@ function App() {
               {notice}
             </p>
           )}
+{pendingAttendanceAction && (
+  <div className="register-notice" style={{ display: "block" }}>
+    <h3>
+      Verifikasi Wajah -{" "}
+      {pendingAttendanceAction === "check-in" ? "Check-in" : "Check-out"}
+    </h3>
 
+    <FaceRecognition
+      user={user}
+      mode="verify"
+      onVerify={(embedding) =>
+        handleAttendance(pendingAttendanceAction, embedding)
+      }
+    />
+
+    <button
+      className="login-button"
+      type="button"
+      onClick={() => setPendingAttendanceAction(null)}
+      disabled={attendanceLoading}
+    >
+      Batal
+    </button>
+  </div>
+)}
           <button
             className="login-button"
             type="button"
-            onClick={() => handleAttendance("check-in")}
+            onClick={() => setPendingAttendanceAction("check-in")}
             disabled={
               attendanceLoading ||
               Boolean(todayAttendance?.check_in_at)
@@ -230,7 +405,7 @@ function App() {
             className="login-button"
             type="button"
             style={{ marginTop: 8 }}
-            onClick={() => handleAttendance("check-out")}
+            onClick={() => setPendingAttendanceAction("check-out")}
             disabled={
               attendanceLoading ||
               !todayAttendance?.check_in_at ||
